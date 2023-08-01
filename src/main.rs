@@ -1,7 +1,26 @@
 use std::{env, fs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::process::Command;
+
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Determines the command used to invoke dmenu Executed with your shell ($SHELL) or /bin/sh
+    #[arg(long)]
+    dmenu: Option<String>,
+
+    /// Sets the terminal emulator used to start terminal apps
+    #[arg(long)]
+    term: Option<String>,
+
+    /// Must point to a read-writeable file (will create if not exists). In this mode entries are sorted by usage frequency.
+    #[arg(long)]
+    usage_log: Option<PathBuf>,
+}
+
 
 #[derive(Debug)]
 struct DesktopEntry {
@@ -52,23 +71,19 @@ impl DesktopEntry {
 }
 
 fn main() {
-    // clap
+    let cli = Cli::parse();
     let entries = read_entries();
-    // clear up the entries
+    // clean_entries(&mut entries);
     // run dmenu and wait for the output
     // when dmenu returns, run the command in the struct
+    // use usage_log
 }
 
-fn read_entries() -> Option<Vec<DesktopEntry>> {
-    let home_applications = match env::var("HOME") {
-        Ok(mut home) => {
-            home.push_str("/.local/share/applications");
-            home
-        },
-        Err(_) => return None,
-    };
+fn read_entries() -> Result<Vec<DesktopEntry>, env::VarError> {
+    let xdg_data_dirs = env::var("XDG_DATA_DIRS")?; // TODO: use defaults if not present.
+    let mut home_applications = env::var("HOME")?;
+    home_applications.push_str("/.local/share/applications");
 
-    let Ok(xdg_data_dirs) = env::var("XDG_DATA_DIRS") else { return None };
     let data_dirs = xdg_data_dirs.split(":").collect::<Vec<&str>>();
     let mut application_folders = Vec::new();
     for dir in data_dirs {
@@ -85,7 +100,11 @@ fn read_entries() -> Option<Vec<DesktopEntry>> {
         entries.append(&mut new_entries);
     }
 
-    Some(entries)
+    Ok(entries)
+}
+
+fn clean_entries(entries: &mut Vec<DesktopEntry>) {
+    // TODO: clean repeats, and remove everything that's hidden
 }
 
 fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
@@ -106,10 +125,9 @@ fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
     entries
 }
 
-fn parse_entry(entry: std::path::PathBuf) -> Option<DesktopEntry> {
+fn parse_entry(entry: PathBuf) -> Option<DesktopEntry> {
     let Ok(contents) = fs::read_to_string(entry) else { return None };
     let mut split = contents.split("\n");
-    split.next(); // don't use the first line [Desktop Entry]
 
     let mut hash_map: HashMap<String, String> = HashMap::new();
     for line in split {
