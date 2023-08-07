@@ -22,6 +22,7 @@ struct DesktopEntry {
     name: String,
     exec: String,
     hide: bool,
+    terminal: bool,
     try_exec: Option<String>,
     path: Option<String>,
 }
@@ -37,12 +38,13 @@ impl DesktopEntry {
 
         let try_exec = section.get("TryExec").map(str::to_string);
         let path = section.get("Path").map(str::to_string);
-        // TODO: Later add support for Terminal key
+        let terminal = section.get("Terminal") == Some("true");
         
         Some(DesktopEntry {
             name: name.to_owned(),
             exec: exec.to_owned(),
             hide,
+            terminal,
             try_exec,
             path
         } )
@@ -73,6 +75,7 @@ fn main() {
         // 3: when dmenu returns, run the command in the struct
 
         /*
+        // TODO: Later add support for Terminal key
         test if tryexec is here, else don't make visible / skip entry
         if let Some(exec_path) = try_exec {
             look through path
@@ -95,9 +98,12 @@ fn main() {
 }
 
 fn read_entries() -> Result<Vec<DesktopEntry>, ErrorKind> {
-    let data_home = match env::var_os("HOME") {
-        Some(home) => PathBuf::from(home).join(".local/share/applications"),
-        None => return Err(ErrorKind::HomeNotFound), // maybe later use dirs crate to get home
+    let data_home = match env::var_os("XDG_DATA_HOME") {
+        Some(data_home) => PathBuf::from(data_home).join("applications"),
+        None => match env::var_os("HOME") {
+            Some(home) => PathBuf::from(home).join(".local/share/applications"),
+            None => return Err(ErrorKind::HomeNotFound), // maybe later use dirs crate to get home
+        }
     };
     let data_dirs = match env::var_os("XDG_DATA_DIRS") {
         Some(dirs) => env::split_paths(&dirs).map(PathBuf::from).collect(),
