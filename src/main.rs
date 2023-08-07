@@ -88,7 +88,6 @@ fn main() {
         }
     };
 
-    let cleaned_entries = clean_entries(entries);
     // 5: sort using usage_log
 
     if let Some(dmenu) = cli.dmenu {
@@ -124,19 +123,6 @@ fn read_entries() -> Result<Vec<DesktopEntry>, ErrorKind> {
     }
 
     Ok(entries)
-}
-
-fn clean_entries(entries: Vec<DesktopEntry>) -> Vec<DesktopEntry> {
-    let mut new_entries: Vec<DesktopEntry> = Vec::new();
-    for entry in entries {
-        if entry.hide {
-            new_entries.retain(|x| x.name != entry.name);
-            continue;
-        }
-        new_entries.push(entry);
-    }
-
-    new_entries
 }
 
 fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
