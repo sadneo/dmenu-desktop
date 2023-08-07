@@ -1,9 +1,8 @@
 use std::{env, fs};
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
-use std::process::Command;
 
 use clap::Parser;
+use ini::Ini;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -11,10 +10,6 @@ struct Cli {
     /// Determines the command used to invoke dmenu Executed with your shell ($SHELL) or /bin/sh
     #[arg(long)]
     dmenu: Option<String>,
-
-    /// Sets the terminal emulator used to start terminal apps
-    #[arg(long)]
-    term: Option<String>,
 
     /// Must point to a read-writeable file (will create if not exists). In this mode entries are sorted by usage frequency.
     #[arg(long)]
@@ -25,49 +20,32 @@ struct Cli {
 #[derive(Debug)]
 struct DesktopEntry {
     name: String,
+    exec: String,
     hide: bool,
-    command: Command,
+    try_exec: Option<String>,
+    path: Option<String>,
 }
 
 impl DesktopEntry {
-    fn new(hash_map: HashMap<String, String>) -> Option<DesktopEntry> {
-        let nothing = String::from("");
+    fn from_ini(ini: Ini) -> Option<DesktopEntry> {
+        let Some(section) = ini.section(Some("Desktop Entry")) else { return None };
+        if section.get("Type") != Some("Application") { return None; }
+        
+        let Some(name) = section.get("Name") else { return None };
+        let Some(exec) = section.get("Exec") else { return None };
+        let hide = section.get("NoDisplay") == Some("true") || section.get("Hidden") == Some("true");
 
-        let Some(name) = hash_map.get(&String::from("Name")) else { return None };
-        let Some(exec) = hash_map.get(&String::from("Exec")) else { return None };
-        let no_display = hash_map.get(&String::from("NoDisplay")).unwrap_or(&nothing);
-        let hidden = hash_map.get(&String::from("Hidden")).unwrap_or(&nothing);
-        let try_exec = hash_map.get(&String::from("TryExec"));
-        let path = hash_map.get(&String::from("Path"));
-        let terminal = hash_map.get(&String::from("Terminal"));
-
-        // test if tryexec is here, else don't make visible / skip entry
-        if let Some(try_exec) = try_exec {
-            let path = Path::new(try_exec);
-            if !path.exists() {
-                return None;
-            }
-        }
-
-        let hide = no_display == "true" || hidden == "true";
-        let mut exec = exec.split(" ");
-        let exec_path = exec.nth(0).expect("exec should contain text").to_string();
-        let mut command;
-
-        if terminal.is_none() {
-            command = Command::new(exec_path);
-        } else {
-            command = Command::new("foot");
-            command.arg(exec_path);
-        }
-
-        if let Some(path) = path {
-            if !path.is_empty() {
-                command.current_dir(path);
-            }
-        }
-
-        Some(DesktopEntry { name: name.to_owned(), hide, command })
+        let try_exec = section.get("TryExec").map(str::to_string);
+        let path = section.get("Path").map(str::to_string);
+        // TODO: Later add support for Terminal key
+        
+        Some(DesktopEntry {
+            name: name.to_owned(),
+            exec: exec.to_owned(),
+            hide,
+            try_exec,
+            path
+        } )
     }
 }
 
@@ -93,6 +71,23 @@ fn main() {
     if let Some(dmenu) = cli.dmenu {
         // 2: run dmenu and wait for the output
         // 3: when dmenu returns, run the command in the struct
+
+        /*
+        test if tryexec is here, else don't make visible / skip entry
+        if let Some(exec_path) = try_exec {
+            look through path
+        }
+
+        let Some(exec_split) = shlex::split(exec) else { return None };
+        let program = exec_split.remove(0);
+        let command = Command::new(program).args(exec_split);
+
+        if let Some(path) = path {
+            command.current_dir(path);
+        }
+        */
+
+
         // 4: update usage_log
     } else {
         // 1: print to stdout
@@ -101,8 +96,8 @@ fn main() {
 
 fn read_entries() -> Result<Vec<DesktopEntry>, ErrorKind> {
     let data_home = match env::var_os("HOME") {
-        Some(home) => PathBuf::from(home).join("applications"),
-        None => return Err(ErrorKind::HomeNotFound), // maybe later use dirs to get home
+        Some(home) => PathBuf::from(home).join(".local/share/applications"),
+        None => return Err(ErrorKind::HomeNotFound), // maybe later use dirs crate to get home
     };
     let data_dirs = match env::var_os("XDG_DATA_DIRS") {
         Some(dirs) => env::split_paths(&dirs).map(PathBuf::from).collect(),
@@ -137,32 +132,11 @@ fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
             continue;
         }
 
-        let Some(entry) = parse_entry(path) else { continue };
+        let Ok(ini) = Ini::load_from_file_opt(path, ini::ParseOption { enabled_quote: false, enabled_escape: false } ) else { continue };
+        let Some(entry) = DesktopEntry::from_ini(ini) else { continue };
         eprintln!("{:?}", entry);
         entries.push(entry);
     }
     entries
 }
 
-fn parse_entry(entry: PathBuf) -> Option<DesktopEntry> {
-    let Ok(contents) = fs::read_to_string(entry) else { return None };
-    let lines = contents.split("\n");
-
-    let mut hash_map: HashMap<String, String> = HashMap::new();
-    for line in lines {
-        if line.starts_with("[") && line.ends_with("]") { continue } // category
-
-        // eprintln!("{}", line);
-        let mut line = line.split("=");
-        let key = line.nth(0);
-        let value = line.nth(0);
-        if let None = value { continue; } // hack
-
-        hash_map.insert(key.unwrap().to_string(), value.unwrap().to_string());
-    }
-    // check if type is application
-    let Some(kind) = hash_map.remove(&String::from("Type")) else { return None };
-    if kind != "Application" { return None }
-    
-    DesktopEntry::new(hash_map)
-}
