@@ -89,37 +89,37 @@ fn main() {
     };
 
     let cleaned_entries = clean_entries(entries);
-    // 2: sort using usage_log
+    // 5: sort using usage_log
 
     if let Some(dmenu) = cli.dmenu {
-        // run dmenu and wait for the output
-        // when dmenu returns, run the command in the struct
-        // 2: update usage_log
+        // 2: run dmenu and wait for the output
+        // 3: when dmenu returns, run the command in the struct
+        // 4: update usage_log
     } else {
-        // print to stdout
+        // 1: print to stdout
     }
 }
 
 fn read_entries() -> Result<Vec<DesktopEntry>, ErrorKind> {
-    let Ok(mut home_applications) = env::var("HOME") else {
-        return Err(ErrorKind::HomeNotFound);
+    let data_home = match env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join("applications"),
+        None => return Err(ErrorKind::HomeNotFound), // maybe later use dirs to get home
     };
-    let xdg_data_dirs = env::var("XDG_DATA_DIRS").unwrap_or(String::new());
-    home_applications.push_str("/.local/share/applications");
+    let data_dirs = match env::var_os("XDG_DATA_DIRS") {
+        Some(dirs) => env::split_paths(&dirs).map(PathBuf::from).collect(),
+        None => vec![PathBuf::from("/usr/local/share"), PathBuf::from("/usr/share")],
+    };
 
-    let data_dirs = xdg_data_dirs.split(":").collect::<Vec<&str>>();
-    let mut application_folders = Vec::new();
-    for dir in data_dirs {
-        let mut dir = dir.to_owned();
-        dir.push_str("/applications");
-        application_folders.push(dir);
+    let mut application_dirs = Vec::new();
+    application_dirs.push(data_home);
+    for data_dir in data_dirs {
+        application_dirs.push(data_dir.join("applications"));
     }
-    application_folders.insert(0, home_applications);
-    println!("{:?}", application_folders);
+    eprintln!("{:?}", application_dirs);
 
     let mut entries = Vec::new();
-    for application_folder in application_folders {
-        let mut new_entries = get_entries(application_folder);
+    for application_dir in application_dirs {
+        let mut new_entries = get_entries(application_dir);
         entries.append(&mut new_entries);
     }
 
@@ -140,34 +140,38 @@ fn clean_entries(entries: Vec<DesktopEntry>) -> Vec<DesktopEntry> {
 }
 
 fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
-    let entries: Vec<DesktopEntry> = Vec::new();
+    let mut entries: Vec<DesktopEntry> = Vec::new();
     let Ok(applications) = fs::read_dir(path) else { return entries };
-    for entry in applications {
-        let Ok(entry) = entry else { continue };
-        let path = entry.path();
+    for file in applications {
+        let Ok(file) = file else { continue };
+
+        let path = file.path();
         let extension = path.extension();
-        if extension == None && extension.unwrap() != "desktop" {
+        if extension == None || extension.unwrap() != "desktop" {
             continue;
         }
 
-        println!("{:?}", entry);
-        let entry = parse_entry(path);
-        println!("{:?}", entry);
+        let Some(entry) = parse_entry(path) else { continue };
+        eprintln!("{:?}", entry);
+        entries.push(entry);
     }
     entries
 }
 
 fn parse_entry(entry: PathBuf) -> Option<DesktopEntry> {
     let Ok(contents) = fs::read_to_string(entry) else { return None };
-    let mut split = contents.split("\n");
+    let lines = contents.split("\n");
 
     let mut hash_map: HashMap<String, String> = HashMap::new();
-    for line in split {
-        if line.starts_with("[") && line.ends_with("]") { continue }
+    for line in lines {
+        if line.starts_with("[") && line.ends_with("]") { continue } // category
+
+        // eprintln!("{}", line);
         let mut line = line.split("=");
         let key = line.nth(0);
         let value = line.nth(0);
         if let None = value { continue; } // hack
+
         hash_map.insert(key.unwrap().to_string(), value.unwrap().to_string());
     }
     // check if type is application
