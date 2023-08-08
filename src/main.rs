@@ -1,5 +1,7 @@
 use std::{env, fs};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::io::{self, Write};
 
 use clap::Parser;
 use ini::Ini;
@@ -23,7 +25,6 @@ struct DesktopEntry {
     exec: String,
     hide: bool,
     terminal: bool,
-    try_exec: Option<String>,
     path: Option<String>,
 }
 
@@ -34,75 +35,95 @@ impl DesktopEntry {
         
         let Some(name) = section.get("Name") else { return None };
         let Some(exec) = section.get("Exec") else { return None };
-        let hide = section.get("NoDisplay") == Some("true") || section.get("Hidden") == Some("true");
 
         let try_exec = section.get("TryExec").map(str::to_string);
         let path = section.get("Path").map(str::to_string);
         let terminal = section.get("Terminal") == Some("true");
+
+        let mut exec_exists = true;
+        if let Some(try_exec) = &try_exec {
+            exec_exists = PathBuf::from(try_exec).exists();
+            if !exec_exists {
+                exec_exists = exists_on_path(try_exec);
+            }
+        }
+
+        let hide = !exec_exists || section.get("NoDisplay") == Some("true") || section.get("Hidden") == Some("true");
         
         Some(DesktopEntry {
             name: name.to_owned(),
             exec: exec.to_owned(),
             hide,
             terminal,
-            try_exec,
             path
         } )
     }
 }
 
-#[derive(Debug)]
-enum ErrorKind {
-    HomeNotFound,
+fn exists_on_path(exec: &str) -> bool {
+    let Ok(path_var) = env::var("PATH") else { return false };
+    let path_var = env::split_paths(&path_var);
+    for dir in path_var {
+        let test_path = dir.join(exec);
+        if test_path.exists() {
+            return true;
+        }
+    }
+    false
 }
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
-    let entries = match read_entries() {
-        Ok(t) => t,
-        Err(error_kind) => match error_kind {
-            ErrorKind::HomeNotFound => {
-                eprintln!("$HOME not found");
-                return;
-            }
-        }
-    };
+    let entries = read_entries()?;
 
     // 5: sort using usage_log
+    let mut entries_string = String::new();
+    for entry in &entries {
+        // TODO: add support for hide value
+        entries_string.push_str(entry.name.as_str());
+        entries_string.push_str("\n");
+    }
 
     if let Some(dmenu) = cli.dmenu {
-        // 2: run dmenu and wait for the output
-        // 3: when dmenu returns, run the command in the struct
+        let Some(mut dmenu_split) = shlex::split(&dmenu) else { return Err(io::Error::new(io::ErrorKind::Other, "Invalid dmenu command.")) };
+        let program = dmenu_split.remove(0);
+        let mut menu_handle = Command::new(program).args(dmenu_split).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+        let _ = menu_handle.stdin.as_mut().unwrap().write(entries_string.as_bytes());
+        let output = String::from_utf8(menu_handle.wait_with_output()?.stdout).expect("Output should be valid UTF8");
 
-        /*
-        // TODO: Later add support for Terminal key
-        test if tryexec is here, else don't make visible / skip entry
-        if let Some(exec_path) = try_exec {
-            look through path
-        }
+        let Some(selected_entry) = entries.iter().find(|e| e.name == output.trim()) else {
+            // run command
+            return Ok(());
+        };
+        
+        eprintln!("{:?}", selected_entry);
 
-        let Some(exec_split) = shlex::split(exec) else { return None };
+        // TODO: add support for Terminal key
+        let Some(mut exec_split) = shlex::split(selected_entry.exec.as_str()) else { return Err(io::Error::new(io::ErrorKind::Other, "Invalid exec key.")) };
         let program = exec_split.remove(0);
-        let command = Command::new(program).args(exec_split);
-
-        if let Some(path) = path {
+        let mut command = Command::new(program);
+        command.args(exec_split);
+        if let Some(path) = &selected_entry.path {
             command.current_dir(path);
         }
-        */
+
+        // TODO: handle error
+        let exec_handle = command.spawn();
 
 
         // 4: update usage_log
     } else {
-        // 1: print to stdout
+        println!("{}", entries_string);
     }
+    Ok(())
 }
 
-fn read_entries() -> Result<Vec<DesktopEntry>, ErrorKind> {
+fn read_entries() -> io::Result<Vec<DesktopEntry>> {
     let data_home = match env::var_os("XDG_DATA_HOME") {
         Some(data_home) => PathBuf::from(data_home).join("applications"),
         None => match env::var_os("HOME") {
             Some(home) => PathBuf::from(home).join(".local/share/applications"),
-            None => return Err(ErrorKind::HomeNotFound), // maybe later use dirs crate to get home
+            None => return Err(io::Error::new(io::ErrorKind::Other, "HomeNotFound")), // maybe later use dirs crate to get home
         }
     };
     let data_dirs = match env::var_os("XDG_DATA_DIRS") {
