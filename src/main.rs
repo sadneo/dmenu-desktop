@@ -3,19 +3,33 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::io::{self, Write};
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use ini::Ini;
+
+#[derive(ValueEnum, Clone, Debug)]
+enum EntryType {
+    Name,
+    Command,
+    Filename,
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Determines the command used to invoke dmenu Executed with your shell ($SHELL) or /bin/sh
+    #[arg(long, default_value="name")]
+    entry_type: EntryType,
+
+    /// Determines the command used to invoke dmenu or an equivalent. Executed with your shell ($SHELL) or /bin/sh
     #[arg(long)]
     dmenu: Option<String>,
 
     /// Must point to a read-writeable file (will create if not exists). In this mode entries are sorted by usage frequency.
     #[arg(long)]
     usage_log: Option<PathBuf>,
+
+    /// Terminal emulator used to launch applications, does nothing if dmenu is not provided, put {} where the dmenu command should go
+    #[arg(long)]
+    terminal: Option<String>,
 }
 
 
@@ -60,6 +74,13 @@ impl DesktopEntry {
             path
         } )
     }
+    fn field(&self, entry_type: &EntryType) -> &str {
+        match entry_type {
+            EntryType::Name => self.name.as_str(),
+            EntryType::Filename => self.filename.as_str(),
+            EntryType::Command => self.exec.split(" ").nth(0).unwrap_or(self.name.as_str()),
+        }
+    }
 }
 
 fn exists_on_path(exec: &str) -> bool {
@@ -86,7 +107,7 @@ fn main() -> std::io::Result<()> {
             hidden_entries.push(entry);
             continue;
         } else if hidden_entries.iter().find(|e| e.name == entry.name).is_none() {
-            entries_string.push_str(entry.name.as_str());
+            entries_string.push_str(entry.field(&cli.entry_type));
             entries_string.push_str("\n");
         }
     }
@@ -98,20 +119,27 @@ fn main() -> std::io::Result<()> {
         let _ = menu_handle.stdin.as_mut().unwrap().write(entries_string.as_bytes());
         let output = String::from_utf8(menu_handle.wait_with_output()?.stdout).expect("Output should be valid UTF8");
 
-        let Some(selected_entry) = entries.iter().find(|e| e.name == output.trim()) else {
-            // TODO: entry doesn't exist, run as command
+        let Some(selected_entry) = entries.iter().find(|e| e.field(&cli.entry_type) == output.trim()) else {
+            let Some(mut split) = shlex::split(output.trim()) else { return Err(io::Error::new(io::ErrorKind::Other, "Invalid command.")) };
+            let program = split.remove(0);
+            let output = Command::new(program).args(split).output()?;
+            println!("{}", String::from_utf8_lossy(&output.stdout));
+            eprintln!("Command exited with status {}", output.status.code().unwrap_or(-1));
             return Ok(());
         };
         
-        let Some(mut exec_split) = shlex::split(selected_entry.exec.as_str()) else { return Err(io::Error::new(io::ErrorKind::Other, "Invalid exec key.")) };
-        let mut command;
-        if selected_entry.terminal {
-            // TODO: add support for changing the terminal used from the default
-            command = Command::new("kitty");
-        } else {
-            let program = exec_split.remove(0);
-            command = Command::new(program);
+        let mut command_string = selected_entry.exec.to_owned();
+        if cli.terminal.is_some() && selected_entry.terminal {
+            let terminal = cli.terminal.unwrap();
+            if !terminal.contains("{}") {
+                return Err(io::Error::new(io::ErrorKind::Other, "Invalid terminal command"));
+            }
+            command_string = terminal.replace("{}", command_string.as_str());
         }
+
+        let Some(mut exec_split) = shlex::split(command_string.as_str()) else { return Err(io::Error::new(io::ErrorKind::Other, "Invalid exec key.")) };
+        let program = exec_split.remove(0);
+        let mut command = Command::new(program);
         command.args(exec_split);
         if let Some(path) = &selected_entry.path {
             command.current_dir(path);
