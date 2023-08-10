@@ -74,14 +74,19 @@ fn exists_on_path(exec: &str) -> bool {
 
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
-    let entries = read_entries()?;
+    let mut entries = read_entries()?;
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-    // 5: sort using usage_log
+    let mut hidden_entries = Vec::new();
     let mut entries_string = String::new();
     for entry in &entries {
-        // TODO: add support for hide value
-        entries_string.push_str(entry.name.as_str());
-        entries_string.push_str("\n");
+        if entry.hide {
+            hidden_entries.push(entry);
+            continue;
+        } else if hidden_entries.iter().find(|e| e.name == entry.name).is_none() {
+            entries_string.push_str(entry.name.as_str());
+            entries_string.push_str("\n");
+        }
     }
 
     if let Some(dmenu) = cli.dmenu {
@@ -92,28 +97,29 @@ fn main() -> std::io::Result<()> {
         let output = String::from_utf8(menu_handle.wait_with_output()?.stdout).expect("Output should be valid UTF8");
 
         let Some(selected_entry) = entries.iter().find(|e| e.name == output.trim()) else {
-            // run command
+            // TODO: entry doesn't exist, run as command
             return Ok(());
         };
         
-        eprintln!("{:?}", selected_entry);
-
-        // TODO: add support for Terminal key
         let Some(mut exec_split) = shlex::split(selected_entry.exec.as_str()) else { return Err(io::Error::new(io::ErrorKind::Other, "Invalid exec key.")) };
-        let program = exec_split.remove(0);
-        let mut command = Command::new(program);
+        let mut command;
+        if selected_entry.terminal {
+            // TODO: add support for changing the terminal used from the default
+            command = Command::new("kitty");
+        } else {
+            let program = exec_split.remove(0);
+            command = Command::new(program);
+        }
         command.args(exec_split);
         if let Some(path) = &selected_entry.path {
             command.current_dir(path);
         }
 
-        // TODO: handle error
-        let exec_handle = command.spawn();
-
-
-        // 4: update usage_log
+        if let Err(e) = command.spawn() {
+            eprintln!("Application exited with error: {}", e);
+        }
     } else {
-        println!("{}", entries_string);
+        print!("{}", entries_string);
     }
     Ok(())
 }
@@ -123,7 +129,7 @@ fn read_entries() -> io::Result<Vec<DesktopEntry>> {
         Some(data_home) => PathBuf::from(data_home).join("applications"),
         None => match env::var_os("HOME") {
             Some(home) => PathBuf::from(home).join(".local/share/applications"),
-            None => return Err(io::Error::new(io::ErrorKind::Other, "HomeNotFound")), // maybe later use dirs crate to get home
+            None => return Err(io::Error::new(io::ErrorKind::Other, "HomeNotFound")),
         }
     };
     let data_dirs = match env::var_os("XDG_DATA_DIRS") {
@@ -136,7 +142,6 @@ fn read_entries() -> io::Result<Vec<DesktopEntry>> {
     for data_dir in data_dirs {
         application_dirs.push(data_dir.join("applications"));
     }
-    eprintln!("{:?}", application_dirs);
 
     let mut entries = Vec::new();
     for application_dir in application_dirs {
@@ -161,7 +166,6 @@ fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
 
         let Ok(ini) = Ini::load_from_file_opt(path, ini::ParseOption { enabled_quote: false, enabled_escape: false } ) else { continue };
         let Some(entry) = DesktopEntry::from_ini(ini) else { continue };
-        eprintln!("{:?}", entry);
         entries.push(entry);
     }
     entries
