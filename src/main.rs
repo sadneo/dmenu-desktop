@@ -22,6 +22,7 @@ struct Cli {
 #[derive(Debug)]
 struct DesktopEntry {
     name: String,
+    filename: String,
     exec: String,
     hide: bool,
     terminal: bool,
@@ -29,7 +30,7 @@ struct DesktopEntry {
 }
 
 impl DesktopEntry {
-    fn from_ini(ini: Ini) -> Option<DesktopEntry> {
+    fn from_ini(filename: &str, ini: Ini) -> Option<DesktopEntry> {
         let Some(section) = ini.section(Some("Desktop Entry")) else { return None };
         if section.get("Type") != Some("Application") { return None; }
         
@@ -52,6 +53,7 @@ impl DesktopEntry {
         
         Some(DesktopEntry {
             name: name.to_owned(),
+            filename: filename.to_owned(),
             exec: exec.to_owned(),
             hide,
             terminal,
@@ -159,13 +161,15 @@ fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
         let Ok(file) = file else { continue };
 
         let path = file.path();
+        let Some(stem) = path.file_stem() else { continue; };
+        let Some(stem) = stem.to_str() else { continue; };
         let extension = path.extension();
         if extension == None || extension.unwrap() != "desktop" {
             continue;
         }
 
-        let Ok(ini) = Ini::load_from_file_opt(path, ini::ParseOption { enabled_quote: false, enabled_escape: false } ) else { continue };
-        let Some(entry) = DesktopEntry::from_ini(ini) else { continue };
+        let Ok(ini) = Ini::load_from_file_opt(&path, ini::ParseOption { enabled_quote: false, enabled_escape: false } ) else { continue };
+        let Some(entry) = DesktopEntry::from_ini(stem, ini) else { continue };
         entries.push(entry);
     }
     entries
