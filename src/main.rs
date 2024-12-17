@@ -1,5 +1,6 @@
+use std::fs::ReadDir;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{env, fs};
 
@@ -106,16 +107,16 @@ fn exists_on_path(exec: &str) -> bool {
 
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
-    let mut entries = read_entries()?;
+    let mut entries: Vec<DesktopEntry> = read_entries()
+        .unwrap()
+        .into_iter()
+        .filter(|entry| !entry.hide)
+        .collect();
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-    let mut hidden_entries = Vec::new();
     let mut entries_string = String::new();
     for entry in &entries {
-        if entry.hide {
-            hidden_entries.push(entry);
-            continue;
-        } else if hidden_entries.iter().any(|e| e.name == entry.name) {
+        if !entry.hide {
             entries_string.push_str(entry.field(&cli.entry_type));
             entries_string.push('\n');
         }
@@ -127,18 +128,15 @@ fn main() -> std::io::Result<()> {
     }
 
     let dmenu = cli.dmenu.unwrap();
-    let Some(mut dmenu_split) = shlex::split(&dmenu) else {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Invalid dmenu command.",
-        ));
-    };
+    let mut dmenu_split = shlex::split(&dmenu).unwrap();
+
     let program = dmenu_split.remove(0);
     let mut menu_handle = Command::new(program)
         .args(dmenu_split)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .unwrap();
     let _ = menu_handle
         .stdin
         .as_mut()
@@ -151,6 +149,7 @@ fn main() -> std::io::Result<()> {
         .iter()
         .find(|e| e.field(&cli.entry_type) == output.trim())
     else {
+        println!("{:?}, {:?}", output, output.trim());
         let Some(mut split) = shlex::split(output.trim()) else {
             return Err(io::Error::new(io::ErrorKind::Other, "Invalid command."));
         };
@@ -167,6 +166,7 @@ fn main() -> std::io::Result<()> {
     let mut command_string = selected_entry.exec.to_owned();
     if cli.terminal.is_some() && selected_entry.terminal {
         let terminal = cli.terminal.unwrap();
+        println!("{:?}", terminal);
         if !terminal.contains("{}") {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -192,43 +192,43 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn read_entries() -> io::Result<Vec<DesktopEntry>> {
-    let data_home = match env::var_os("XDG_DATA_HOME") {
-        Some(data_home) => PathBuf::from(data_home).join("applications"),
-        None => match env::var_os("HOME") {
-            Some(home) => PathBuf::from(home).join(".local/share/applications"),
-            None => return Err(io::Error::new(io::ErrorKind::Other, "HomeNotFound")),
-        },
+fn read_entries() -> Option<Vec<DesktopEntry>> {
+    let mut app_dirs = Vec::new();
+    match env::var_os("XDG_DATA_HOME") {
+        Some(data_home) => app_dirs.push(PathBuf::from(data_home).join("applications")),
+        None => {
+            if let Some(home) = env::var_os("HOME") {
+                app_dirs.push(PathBuf::from(home).join(".local/share/applications"));
+            }
+        }
     };
-    let data_dirs = match env::var_os("XDG_DATA_DIRS") {
-        Some(dirs) => env::split_paths(&dirs).map(PathBuf::from).collect(),
-        None => vec![
-            PathBuf::from("/usr/local/share"),
-            PathBuf::from("/usr/share"),
-        ],
+    match env::var_os("XDG_DATA_DIRS") {
+        Some(dirs) => env::split_paths(&dirs)
+            .map(PathBuf::from)
+            .for_each(|mut p| {
+                p.push("applications");
+                app_dirs.push(p);
+            }),
+        None => {
+            app_dirs.push(PathBuf::from("/usr/local/share/applications"));
+            app_dirs.push(PathBuf::from("/usr/share/applications"));
+        }
     };
-
-    let mut application_dirs = Vec::new();
-    application_dirs.push(data_home);
-    for data_dir in data_dirs {
-        application_dirs.push(data_dir.join("applications"));
-    }
 
     let mut entries = Vec::new();
-    for application_dir in application_dirs {
-        let mut new_entries = get_entries(application_dir);
-        entries.append(&mut new_entries);
+    for app_dir in app_dirs {
+        if let Ok(entry_files) = fs::read_dir(app_dir) {
+            let mut new_entries = get_entries(entry_files);
+            entries.append(&mut new_entries);
+        }
     }
 
-    Ok(entries)
+    Some(entries)
 }
 
-fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
+fn get_entries(app_files: ReadDir) -> Vec<DesktopEntry> {
     let mut entries: Vec<DesktopEntry> = Vec::new();
-    let Ok(applications) = fs::read_dir(path) else {
-        return entries;
-    };
-    for file in applications {
+    for file in app_files {
         let Ok(file) = file else { continue };
 
         let path = file.path();
