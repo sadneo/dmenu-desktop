@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::{env, fs};
 
@@ -36,7 +37,7 @@ struct Cli {
     shell: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 struct DesktopEntry {
     name: String,
     filename: String,
@@ -106,15 +107,12 @@ fn exists_on_path(exec: &str) -> bool {
 
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
-    let mut entries = read_entries();
+    let mut entries: Vec<DesktopEntry> = read_entries().into_values().collect();
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    let mut hidden_entries = Vec::new();
+
     let mut entries_string = String::new();
     for entry in &entries {
-        if entry.hide {
-            hidden_entries.push(entry);
-            continue;
-        } else if hidden_entries.iter().any(|e| e.name == entry.name) {
+        if !entry.hide {
             entries_string.push_str(entry.field(&cli.entry_type));
             entries_string.push('\n');
         }
@@ -191,8 +189,8 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-// TODO: verbose mode print which directories are being used
-fn read_entries() -> Vec<DesktopEntry> {
+/// Returns a hash set of desktop entries in arbitrary order
+fn read_entries() -> HashMap<String, DesktopEntry> {
     let mut app_dirs = Vec::new();
     match env::var_os("XDG_DATA_HOME") {
         Some(data_home) => app_dirs.push(PathBuf::from(data_home).join("applications")),
@@ -211,50 +209,44 @@ fn read_entries() -> Vec<DesktopEntry> {
             PathBuf::from("/usr/local/share/applications"),
             PathBuf::from("/usr/share/applications"),
         ],
-    }.into_iter().for_each(|p| app_dirs.push(p));
+    }
+    .into_iter()
+    .for_each(|p| app_dirs.push(p));
 
-    let mut entries = Vec::new();
+    let mut entries = HashMap::new();
     for app_dir in app_dirs {
-        let mut new_entries = get_entries(app_dir);
-        entries.append(&mut new_entries);
-    }
-
-    entries
-}
-
-fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
-    let mut entries: Vec<DesktopEntry> = Vec::new();
-    let Ok(applications) = fs::read_dir(path) else {
-        return entries;
-    };
-    for file in applications {
-        let Ok(file) = file else { continue };
-
-        let path = file.path();
-        let Some(stem) = path.file_stem() else {
+        let Ok(apps) = fs::read_dir(app_dir) else {
             continue;
         };
-        let Some(stem) = stem.to_str() else {
-            continue;
-        };
-        let extension = path.extension();
-        if extension.is_none() || extension.unwrap() != "desktop" {
-            continue;
+        for file in apps {
+            let Ok(file) = file else {
+                break;
+            };
+
+            let path = file.path();
+            let stem = path.file_stem().unwrap().to_str().unwrap();
+            let extension = path.extension();
+            if extension.is_none() || extension.unwrap() != "desktop" {
+                continue;
+            }
+
+            let Ok(ini) = Ini::load_from_file_opt(
+                &path,
+                ini::ParseOption {
+                    enabled_quote: false,
+                    enabled_escape: false,
+                },
+            ) else {
+                continue;
+            };
+            let Some(entry) = DesktopEntry::from_ini(stem, ini) else {
+                continue;
+            };
+
+            let stem = stem.to_owned();
+            entries.entry(stem).or_insert(entry);
         }
-
-        let Ok(ini) = Ini::load_from_file_opt(
-            &path,
-            ini::ParseOption {
-                enabled_quote: false,
-                enabled_escape: false,
-            },
-        ) else {
-            continue;
-        };
-        let Some(entry) = DesktopEntry::from_ini(stem, ini) else {
-            continue;
-        };
-        entries.push(entry);
     }
+
     entries
 }
