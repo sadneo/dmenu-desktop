@@ -61,13 +61,16 @@ impl DesktopEntry {
         let path = section.get("Path").map(str::to_string);
         let terminal = section.get("Terminal") == Some("true");
 
-        let mut exec_exists = true;
-        if let Some(try_exec) = &try_exec {
-            exec_exists = PathBuf::from(try_exec).exists();
-            if !exec_exists {
-                exec_exists = exists_on_path(try_exec);
-            }
-        }
+        let exec_exists = match try_exec {
+            Some(ref exec_path) => match PathBuf::from(exec_path).exists() {
+                true => true,
+                false => {
+                    let path_var = env::var("PATH").expect("$PATH should be defined");
+                    env::split_paths(&path_var).map(|p| p.join(exec)).any(|p| p.exists())
+                },
+            },
+            None => true,
+        };
 
         let hide = !exec_exists
             || section.get("NoDisplay") == Some("true")
@@ -89,20 +92,6 @@ impl DesktopEntry {
             EntryType::Command => self.exec.split(" ").nth(0).unwrap_or(self.name.as_str()),
         }
     }
-}
-
-fn exists_on_path(exec: &str) -> bool {
-    let Ok(path_var) = env::var("PATH") else {
-        return false;
-    };
-    let path_var = env::split_paths(&path_var);
-    for dir in path_var {
-        let test_path = dir.join(exec);
-        if test_path.exists() {
-            return true;
-        }
-    }
-    false
 }
 
 fn main() -> std::io::Result<()> {
