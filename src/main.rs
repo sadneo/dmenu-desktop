@@ -106,9 +106,8 @@ fn exists_on_path(exec: &str) -> bool {
 
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
-    let mut entries = read_entries()?;
+    let mut entries = read_entries();
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
     let mut hidden_entries = Vec::new();
     let mut entries_string = String::new();
     for entry in &entries {
@@ -192,35 +191,35 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn read_entries() -> io::Result<Vec<DesktopEntry>> {
-    let data_home = match env::var_os("XDG_DATA_HOME") {
-        Some(data_home) => PathBuf::from(data_home).join("applications"),
-        None => match env::var_os("HOME") {
-            Some(home) => PathBuf::from(home).join(".local/share/applications"),
-            None => return Err(io::Error::new(io::ErrorKind::Other, "HomeNotFound")),
-        },
+// TODO: verbose mode print which directories are being used
+fn read_entries() -> Vec<DesktopEntry> {
+    let mut app_dirs = Vec::new();
+    match env::var_os("XDG_DATA_HOME") {
+        Some(data_home) => app_dirs.push(PathBuf::from(data_home).join("applications")),
+        None => {
+            if let Some(home) = env::var_os("HOME") {
+                app_dirs.push(PathBuf::from(home).join(".local/share/applications"));
+            }
+        }
     };
-    let data_dirs = match env::var_os("XDG_DATA_DIRS") {
-        Some(dirs) => env::split_paths(&dirs).map(PathBuf::from).collect(),
+    match env::var_os("XDG_DATA_DIRS") {
+        Some(dirs) => env::split_paths(&dirs)
+            .map(PathBuf::from)
+            .map(|p| p.join("applications"))
+            .collect(),
         None => vec![
-            PathBuf::from("/usr/local/share"),
-            PathBuf::from("/usr/share"),
+            PathBuf::from("/usr/local/share/applications"),
+            PathBuf::from("/usr/share/applications"),
         ],
-    };
-
-    let mut application_dirs = Vec::new();
-    application_dirs.push(data_home);
-    for data_dir in data_dirs {
-        application_dirs.push(data_dir.join("applications"));
-    }
+    }.into_iter().for_each(|p| app_dirs.push(p));
 
     let mut entries = Vec::new();
-    for application_dir in application_dirs {
-        let mut new_entries = get_entries(application_dir);
+    for app_dir in app_dirs {
+        let mut new_entries = get_entries(app_dir);
         entries.append(&mut new_entries);
     }
 
-    Ok(entries)
+    entries
 }
 
 fn get_entries<P: AsRef<Path>>(path: P) -> Vec<DesktopEntry> {
