@@ -44,7 +44,7 @@ struct DesktopEntry {
     exec: String,
     hide: bool,
     terminal: bool,
-    path: Option<String>,
+    path: Option<PathBuf>,
 }
 
 impl DesktopEntry {
@@ -57,8 +57,8 @@ impl DesktopEntry {
         let name = section.get("Name")?;
         let exec = section.get("Exec")?;
 
-        let try_exec = section.get("TryExec").map(str::to_string);
-        let path = section.get("Path").map(str::to_string);
+        let try_exec = section.get("TryExec");
+        let path = section.get("Path").map(PathBuf::from);
         let terminal = section.get("Terminal") == Some("true");
 
         let exec_exists = match try_exec {
