@@ -66,8 +66,10 @@ impl DesktopEntry {
                 true => true,
                 false => {
                     let path_var = env::var("PATH").expect("$PATH should be defined");
-                    env::split_paths(&path_var).map(|p| p.join(exec)).any(|p| p.exists())
-                },
+                    env::split_paths(&path_var)
+                        .map(|p| p.join(exec))
+                        .any(|p| p.exists())
+                }
             },
             None => true,
         };
@@ -98,20 +100,25 @@ fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
     let mut entries: Vec<DesktopEntry> = read_entries().into_values().collect();
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
-    let mut entries_string = String::new();
-    for entry in &entries {
-        if !entry.hide {
-            entries_string.push_str(entry.field(&cli.entry_type));
-            entries_string.push('\n');
-        }
-    }
+    let entries_string = entries
+        .iter()
+        .filter(|e| !e.hide)
+        .map(|e| e.field(&cli.entry_type))
+        .fold(String::new(), |mut acc, field| {
+            acc.push_str(field);
+            acc.push('\n');
+            acc
+        });
 
     if cli.dmenu.is_none() {
         print!("{}", entries_string);
-        return Ok(());
+        Ok(())
+    } else {
+        run_command(cli, entries, entries_string)
     }
+}
 
+fn run_command(cli: Cli, entries: Vec<DesktopEntry>, entries_string: String) -> io::Result<()> {
     let dmenu = cli.dmenu.unwrap();
     let Some(mut dmenu_split) = shlex::split(&dmenu) else {
         return Err(io::Error::new(
