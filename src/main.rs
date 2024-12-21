@@ -20,10 +20,6 @@ struct Cli {
     #[arg(long, default_value = "name")]
     entry_type: EntryType,
 
-    /// Must point to a read-writeable file (will create if not exists). In this mode entries are sorted by usage frequency.
-    #[arg(long)]
-    usage_log: Option<PathBuf>,
-
     /// Determines the command used to invoke dmenu or an equivalent.
     #[arg(long)]
     dmenu: Option<String>,
@@ -31,10 +27,6 @@ struct Cli {
     /// Terminal emulator used to launch applications, does nothing if dmenu is not provided, put {} where the dmenu command should go
     #[arg(long)]
     terminal: Option<String>,
-
-    /// Which shell to execute commands with, defaults to $SHELL then /bin/sh
-    #[arg(long)]
-    shell: Option<String>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
